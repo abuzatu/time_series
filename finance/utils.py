@@ -10,6 +10,10 @@ import logging
 
 LOCALIZE_US_STOCK_MARKET = "America/New_York"
 
+# logging level: NOTSET, DEBUG, INFO, WARNING, ERROR, CRITICAL
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
 def update_df_1d(df, datetime):
     # this is for one day interval
     dt = df[datetime]
@@ -69,13 +73,13 @@ def update_df_min(df, datetime, interval_number, interval_unit):
 
 def read_data(stock_ticker,
               period,
-              date_initial_data,
-              date_final_data,
+              date_start,
+              date_end,
               interval,
               add_outside_trading_hours,
               add_dividends_and_stock_splits,
               auto_adjust):
-
+    logger.debug(f"start read_data({stock_ticker}, {date_start}, {date_end}, {interval}")
     # 
     if interval == "1d" or interval == "1h":
         datetime = "Date"
@@ -90,27 +94,33 @@ def read_data(stock_ticker,
     interval_number = int(interval[0:-1])
     interval_unit = interval[-1:]
 
-
     # create the ticker for the desired company
+    logging.debug(f"Create ticker for {stock_ticker}.")
     ticker = yf.Ticker(stock_ticker)
     
+    # read the historical data into a data frame
+    logging.debug(f"Load historical data into a data frame for {stock_ticker}, \
+                  add_dividends_and_stock_splits={add_dividends_and_stock_splits}, \
+                  auto_adjust={auto_adjust}")
     df_original = ticker.history(
         period = period,
-        start = date_initial_data, 
-        end = date_final_data, 
-        interval = interval, 
+        start = date_start,
+        end = date_end,
+        interval = interval,
         prepost = add_outside_trading_hours,
         actions = add_dividends_and_stock_splits,
         auto_adjust = auto_adjust,
         )
-
+    
     if len(df_original) == 0:
+        logging.warning(f"df_original has {len(df_original)} entries for {stock_ticker} between {date_start} to {date_end}.")
         return df_original
 
     # For the 1h interval, there is a bug as it returns a date without the time, so we need to add by hand
     # There are 7 intervals for every day, sometimes fewer if there is a short day
     # The stock market usually starts at 9:30 am and ends at 5 pm.
     # so the last interval has only 30 minutes.
+    logging.debug(f"Introduce datetime_start and datetime_end for {stock_ticker}.")
     df = df_original.reset_index()
     if interval == "1d":
         update_df_1d(df, datetime)
@@ -122,16 +132,32 @@ def read_data(stock_ticker,
         raise RuntimeError(f"interval={interval} not known!")
 
     # 
-    df = df[["datetime_start", "datetime_end", "Open", "High", "Low", "Close", "Volume"]]
+    # 
+    logging.debug(f"Reorganize columns for {stock_ticker}.")
+    list_column = ["datetime_start", "datetime_end", "Open", "High", "Low", "Close", "Volume"]
+    df = df[list_column]
+    
+    # set index to one datetime
+    my_datetime = "datetime_end"
+    df.set_index(my_datetime, inplace = True)
+    df = df.sort_index()
+    
+    return df
 
+def get_output_file_name(output_folder_name, date_start, date_end, interval, stock_ticker):
+    return f"{output_folder_name}/df_{date_start}_{date_end}_{interval}_{stock_ticker}.pickle"
+
+def add_interval_with_open(df_):
+    df = df_.reset_index()
+    # after reset_index the order is datetime_end, then datetime_start
     # add an interval for the open value of each day, so that we can also visualize that
     l = []
     for i in df.index:
         if df.datetime_start[i].hour == 9 and df.datetime_start[i].minute == 30:
             row = df.iloc[i]
             l.append([
-                    row["datetime_start"]  -  pd.Timedelta(1, unit = "m"),
-                    row["datetime_start"],
+                    row["datetime_start"], # datetime_end
+                    row["datetime_start"]  -  pd.Timedelta(1, unit = "m"), # datetime_start
                     row["Open"],
                     row["Open"],
                     row["Open"],
@@ -163,6 +189,40 @@ def apply_split(df, initial, final):
         df[column] /= ratio
     for column in ["Volume"]:
         df[column] *= ratio
+        
+def get_df_pre_market(df):
+    return df[(df.index.hour <= 8) | ((df.index.hour == 9) & (df.index.minute <= 30))]
+
+def get_df_after_market(df):
+    return df[(df.index.hour > 17) | ((df.index.hour == 16) & (df.index.minute > 0))]
+
+def get_df_during_market(df):
+    return df[((df.index.hour == 9) & (df.index.minute > 30))
+              | ((df.index.hour > 9) & (df.index.hour < 16))
+              | (df.index.hour == 16) & (df.index.minute == 0)]
+
+       
+def plot_static(df, stock_ticker):
+    # create a static plot with matplotlib
+    # price at close (but with an added interval of 1 minute before trading to show also the price at Open)
+    fig, ax =  plt.subplots(1, 1, figsize = (9, 6))
+    ax.plot(df.Close, color = "lightgray", label = "Close")
+    # plot markers on the plot for the points where one has to sell or buy
+    # https://matplotlib.org/3.2.1/api/_as_gen/matplotlib.pyplot.plot.html
+    # https://www.w3schools.com/python/matplotlib_markers.asp
+    #
+    plt.legend()
+    plt.title(f"Stock price for {stock_ticker}", fontsize = 18)
+    # plt.xticks(rotation="vertical")
+    # date_form = DateFormatter("%H:%M:%S")
+    date_form = DateFormatter("%Y-%m-%d")
+    # date_form = DateFormatter("%m-%d")
+    ax.xaxis.set_major_formatter(date_form)
+    #ax.set_xticks(rotation='vertical')
+    ax.tick_params(axis = "x", labelsize = 18, labelrotation = 90)
+    plt.ylabel("Stock price [USD]", fontsize = 18)
+    # plt.xlim(date_start, date_end)
+    # plt.ylim(23.78, 35.82)
 
 def plot_interactive(df):
     # plot on an interactive plot using hvplot
@@ -170,8 +230,29 @@ def plot_interactive(df):
     # https://coderzcolumn.com/tutorials/data-science/how-to-convert-static-pandas-plot-matplotlib-to-interactive-hvplot#2
 
     # close
-    security_close = df["Close"].hvplot(
+    df_during = get_df_during_market(df)
+    df_during = add_interval_with_open(df_during)
+    security_close = df_during.hvplot(
+        x = "datetime_end",
+        y = "Close",
         line_color = "lightgray",
+        ylabel = "Stock price [USD]",
+        xlabel = "Date",
+        width = 800,
+        height = 400,
+        # xlim = (DATE_INITIAL_PLOT, DATE_FINAL_PLOT),
+        xlim = (df.index[0].tz_localize(None) - pd.Timedelta(10, "m"),
+                 df.index[-1].tz_localize(None) + pd.Timedelta(10, "m")),
+        # ylim = (100, 135),
+        # hover_cols = ["datetime_end", "Close", "Volume"],
+        grid = True,
+        )
+    
+    security_close_pre = get_df_pre_market(df).hvplot.scatter(
+        x = "datetime_end",
+        y = "Close",
+        line_color = "brown",
+        fill_color = "brown",
         ylabel = "Stock price [USD]",
         xlabel = "Date",
         width = 800,
@@ -182,7 +263,23 @@ def plot_interactive(df):
         # hover_cols = ["datetime_end", "Close", "Volume"],
         grid = True,
         )
-
+    
+    security_close_after = get_df_after_market(df).hvplot.scatter(
+        x = "datetime_end",
+        y = "Close",
+        line_color = "darkblue",
+        fill_color = "darkblue",
+        ylabel = "Stock price [USD]",
+        xlabel = "Date",
+        width = 800,
+        height = 400,
+        # xlim = (DATE_INITIAL_PLOT, DATE_FINAL_PLOT),
+        # xlim = (df.index[0] - pd.Timedelta(1, "h"), df.index[-1] + pd.Timedelta(1, "h")),
+        # ylim = (100, 135),
+        # hover_cols = ["datetime_end", "Close", "Volume"],
+        grid = True,
+        )
+    
     security_close_dots = df["Close"].hvplot.scatter(
         line_color = "darkgray",
         fill_color = "darkgray",
@@ -196,7 +293,7 @@ def plot_interactive(df):
         grid = True,
         )
 
-    final_plot = security_close
+    final_plot = security_close * security_close_pre * security_close_after
     return final_plot
 
 def plot_interactive_volume(df):

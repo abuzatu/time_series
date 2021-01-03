@@ -201,6 +201,53 @@ def get_df_during_market(df):
               | ((df.index.hour > 9) & (df.index.hour < 16))
               | (df.index.hour == 16) & (df.index.minute == 0)]
 
+def get_df_news(input_file_name_news, df):
+    try:
+        f = open(input_file_name_news)
+        lines = f.readlines()
+        counter = 0
+        list_dict_news = []
+        for line in lines:
+            line = line.rstrip()
+            if line == "":
+                continue
+            logging.debug(line)
+            if counter%3 == 0:
+                string_datetime = line
+            if counter%3 == 1:
+                text_short = line
+            if counter%3 == 2:
+                text_long = line
+                # now the piece of news if finished
+                my_string_datetime = string_datetime
+                # if no time is present, but only the date, assume it is shortly before the market open at 9:30 am
+                list_my_string_datetime = my_string_datetime.split(" ")
+                if len(list_my_string_datetime) == 1 and (":" not in list_my_string_datetime):
+                    my_string_datetime += " 09:15:00"
+                datetime_end = pd.to_datetime(my_string_datetime).tz_localize(LOCALIZE_US_STOCK_MARKET)
+                logging.debug(f"string_datetime={string_datetime}, datetime_end={datetime_end}")
+                # find the numerical index in the df of the row whose datetime index is the closest to a given datetime
+                i = np.argmin(np.abs(df.index - datetime_end))
+                stock_close = df["Close"][i]
+                stock_volume = df["Volume"][i]
+                # stock_volume = np.max(df["Volume"].values) * 0.2
+                list_dict_news.append(
+                    {
+                        "datetime_end": datetime_end,
+                        "text_short": text_short,
+                        "text_long": text_long,
+                        "stock_price": stock_close,
+                        "stock_volume": stock_volume,
+                    }
+                )
+            counter += 1
+        df_news = pd.DataFrame(list_dict_news).set_index("datetime_end")
+    except IOError:
+        print(f"File {input_news_file_name} not accessible.")
+    finally:
+        f.close()
+    return df_news
+    
        
 def plot_static(df, stock_ticker):
     # create a static plot with matplotlib
@@ -224,7 +271,7 @@ def plot_static(df, stock_ticker):
     # plt.xlim(date_start, date_end)
     # plt.ylim(23.78, 35.82)
 
-def plot_interactive(df):
+def plot_interactive(df, df_news = None, show_pre = True, show_after = True):
     # plot on an interactive plot using hvplot
     # https://hvplot.holoviz.org/user_guide/Customization.html
     # https://coderzcolumn.com/tutorials/data-science/how-to-convert-static-pandas-plot-matplotlib-to-interactive-hvplot#2
@@ -238,11 +285,11 @@ def plot_interactive(df):
         line_color = "lightgray",
         ylabel = "Stock price [USD]",
         xlabel = "Date",
-        width = 800,
-        height = 400,
+        width = 900,
+        height = 600,
         # xlim = (DATE_INITIAL_PLOT, DATE_FINAL_PLOT),
-        xlim = (df.index[0].tz_localize(None) - pd.Timedelta(10, "m"),
-                 df.index[-1].tz_localize(None) + pd.Timedelta(10, "m")),
+        xlim = (df.index[0].tz_localize(None) - pd.Timedelta(60, "m"),
+                 df.index[-1].tz_localize(None) + pd.Timedelta(60, "m")),
         # ylim = (100, 135),
         # hover_cols = ["datetime_end", "Close", "Volume"],
         grid = True,
@@ -293,18 +340,59 @@ def plot_interactive(df):
         grid = True,
         )
 
-    final_plot = security_close * security_close_pre * security_close_after
+    # news
+    if df_news is not None:
+        show_news = True
+        news = df_news.hvplot.scatter(
+            x = "datetime_end",
+            y = "stock_price",
+            color = "violet",
+            # hover_cols = "all",
+            hover_cols = ["text_short"],
+            legend = True,
+        )
+    
+    final_plot = security_close
+    if show_pre:
+        final_plot *= security_close_pre
+    if show_after:
+        final_plot *= security_close_after
+    if show_news:
+        final_plot *= news
+        
     return final_plot
 
-def plot_interactive_volume(df):
+def plot_interactive_volume(df, df_news = None):
 
     volume = df["Volume"].hvplot.bar(
         # color = "orange",
         line_color = "orange",
         fill_color = "orange",
-        width = 850,
-        height = 300,
+        width = 900,
+        height = 600,
         )
+    
+    # news but buggy, it shows some of the news at the right time
+    # some news do not appear and some appear in the wrong place
+    # probably due to the plotting in .bar format for the volume
+    if df_news is not None:
+        show_news = True
+        # df_news["stock_volume"] = np.max(df.Volume.values) * 0.2
+        # df_news["stock_volume"] = 10000
+        news = df_news.hvplot.scatter(
+            x = "datetime_end",
+            y = "stock_volume",
+            color = "black",
+            # hover_cols = "all",
+            hover_cols = ["text_short"],
+            legend = True,
+        )
+    else:
+        show_news = False
 
-    final_plot_volume = volume
-    return final_plot_volume
+    final_plot = volume
+    
+    if show_news:
+        final_plot *= news
+    
+    return final_plot

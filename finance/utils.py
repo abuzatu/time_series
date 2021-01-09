@@ -79,6 +79,12 @@ def read_data(stock_ticker,
               add_outside_trading_hours,
               add_dividends_and_stock_splits,
               auto_adjust):
+    
+    # fix a bug in yfinance of not applying the localization when this option is on
+    if add_outside_trading_hours:
+        date_start += pd.Timedelta (5, "h")
+        date_end += pd.Timedelta (5, "h")
+    
     logger.debug(f"start read_data({stock_ticker}, {date_start}, {date_end}, {interval}")
     # 
     if interval == "1d" or interval == "1h":
@@ -241,7 +247,10 @@ def get_df_news(input_file_name_news, df):
                     }
                 )
             counter += 1
+        # create data frame and transform it into a time series by having the index as a datetime
         df_news = pd.DataFrame(list_dict_news).set_index("datetime_end")
+        # sort by datetime
+        df_news.sort_index(inplace = True)
     except IOError:
         print(f"File {input_news_file_name} not accessible.")
     finally:
@@ -368,8 +377,8 @@ def plot_interactive_volume(df, df_news = None):
         # color = "orange",
         line_color = "orange",
         fill_color = "orange",
-        width = 900,
-        height = 600,
+        width = 600,
+        height = 400,
         )
     
     # news but buggy, it shows some of the news at the right time

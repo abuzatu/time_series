@@ -7,6 +7,7 @@ import datetime
 import yfinance as yf
 import hvplot.pandas
 import logging
+from pathlib import Path, PurePath
 
 LOCALIZE_US_STOCK_MARKET = "America/New_York"
 
@@ -14,7 +15,72 @@ LOCALIZE_US_STOCK_MARKET = "America/New_York"
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-def update_df_1d(df, datetime):
+def get_list_stock_ticker_in_folder(input_folder_name: str) -> list:
+    '''get list of all the tickers available'''
+    p = Path(input_folder_name).rglob("df_*.pickle")
+    list_stock_ticker = sorted(set([x.name.split(".")[0].split("_")[-1] for x in p if x.is_file()]))
+    logging.debug("list_stock_sticker from folder:")
+    for stock_ticker in list_stock_ticker:
+        logging.debug(stock_ticker)
+    return list_stock_ticker
+
+def get_list_stock_ticker_from_file(input_file_name: str) -> list:
+    list_stock_ticker = []
+    try:
+        f = open(input_file_name)
+        lines = f.readlines()
+        for line in lines:
+            line = line.rstrip()
+            if line.startswith("#"):
+                continue
+            list_stock_ticker.append(line)
+    except IOError:
+        raise RuntimeError (f"File {input_file_name} not accessible.")
+    finally:
+        f.close()
+    logging.debug("list_stock_sticker from file:")
+    for stock_ticker in list_stock_ticker:
+        logging.debug(stock_ticker)
+    return list_stock_ticker
+
+def concat_df_for_different_dates(
+    output_folder_name: str,
+    stock_ticker: str = "ZOM",
+    date_start: str = "1995-01-20",
+    suffix: str = "al",
+) -> pd.DataFrame:
+    '''Example of code to concatenate data frames for a ticker for different dates with different granularities.'''
+    df1 = pd.read_pickle(f"{OUTPUT_FOLDER_NAME}/df_{date_start}_2019-01-11_1d_{stock_ticker}.pickle")
+    df2 = pd.read_pickle(f"{OUTPUT_FOLDER_NAME}/df_2019-01-11_2020-11-11_1h_{stock_ticker}.pickle")
+    df3 = pd.read_pickle(f"{OUTPUT_FOLDER_NAME}/df_2020-11-11_2020-12-11_5m_{stock_ticker}.pickle") # 2m
+    df4 = pd.read_pickle(f"{OUTPUT_FOLDER_NAME}/df_2020-12-11_2020-12-18_1m_{stock_ticker}.pickle")
+    df5 = pd.read_pickle(f"{OUTPUT_FOLDER_NAME}/df_2020-12-18_2020-12-25_1m_{stock_ticker}.pickle")
+    df6 = pd.read_pickle(f"{OUTPUT_FOLDER_NAME}/df_2020-12-25_2021-01-01_1m_{stock_ticker}.pickle")
+    df7 = pd.read_pickle(f"{OUTPUT_FOLDER_NAME}/df_2021-01-01_2021-01-08_1m_{stock_ticker}.pickle")
+    df8 = pd.read_pickle(f"{OUTPUT_FOLDER_NAME}/df_2021-01-08_2021-01-09_1m_{stock_ticker}.pickle")
+
+    df = pd.concat([df1, df2, df3, df4, df5, df6, df7, df8], axis = 0)
+    df.to_pickle(f"{OUTPUT_FOLDER_NAME}/df_{date_start}_2021-01-09_{suffix}_{stock_ticker}.pickle")
+
+    df = df[df.index > pd.to_datetime("2019-01-01").tz_localize(LOCALIZE_US_STOCK_MARKET )]
+    df.to_pickle(f"{OUTPUT_FOLDER_NAME}/df_2019-01-01_2021-01-09_{suffix}_{stock_ticker}.pickle")
+    
+    return df
+
+def get_subset_df(
+    df: pd.DataFrame,
+    start: str,
+    end: str = None,
+) -> pd.DataFrame:
+    series = df.index >= pd.to_datetime(start).tz_localize(LOCALIZE_US_STOCK_MARKET)
+    if end is not None:
+        series = series & (df.index <= pd.to_datetime(end).tz_localize(LOCALIZE_US_STOCK_MARKET))
+    return df[series]
+
+def update_df_1d(
+    df: pd.DataFrame,
+    datetime: pd.Timestamp
+) -> None:
     # this is for one day interval
     dt = df[datetime]
     date = None
@@ -23,7 +89,7 @@ def update_df_1d(df, datetime):
     for i in range(len(df)):
         datetime_start = dt[i].tz_localize(LOCALIZE_US_STOCK_MARKET) + pd.Timedelta(9.5, unit = "h")
         datetime_end = datetime_start + pd.Timedelta(6.5, unit = "h") # there are 6.5 trading hours
-        # print(f"i={i}, counter={counter}, datetime_start={datetime_start}, datetime_end={datetime_end}")
+        # logging.debug(f"i={i}, datetime_start={datetime_start}, datetime_end={datetime_end}")
         list_datetime_start.append(datetime_start)
         list_datetime_end.append(datetime_end)
     df["datetime_start"] = list_datetime_start
@@ -50,7 +116,7 @@ def update_df_1h(df, datetime, interval_number, interval_unit, interval_number_s
             interval = interval_number_short
         datetime_start = datetime_start + pd.Timedelta(interval_number, unit = interval_unit)
         datetime_end = datetime_start + pd.Timedelta(interval, unit = interval_unit)
-        # print(f"i={i}, counter={counter}, datetime_start={datetime_start}, datetime_end={datetime_end}")
+        # logging.debug(f"i={i}, counter={counter}, datetime_start={datetime_start}, datetime_end={datetime_end}")
         list_datetime_start.append(datetime_start)
         list_datetime_end.append(datetime_end)
     df["datetime_start"] = list_datetime_start
@@ -65,12 +131,12 @@ def update_df_min(df, datetime, interval_number, interval_unit):
     for i in range(len(df)):
         datetime_start = dt[i]
         datetime_end = datetime_start + pd.Timedelta(interval_number, unit = interval_unit) 
-        # print(f"i={i}, counter={counter}, datetime_start={datetime_start}, datetime_end={datetime_end}")
+        # logging.debug(f"i={i}, datetime_start={datetime_start}, datetime_end={datetime_end}")
         list_datetime_start.append(datetime_start)
         list_datetime_end.append(datetime_end)
     df["datetime_start"] = list_datetime_start
     df["datetime_end"] = list_datetime_end
-
+    
 def read_data(stock_ticker,
               period,
               date_start,
@@ -80,12 +146,24 @@ def read_data(stock_ticker,
               add_dividends_and_stock_splits,
               auto_adjust):
     
-    # fix a bug in yfinance of not applying the localization when this option is on
-    if add_outside_trading_hours:
-        date_start += pd.Timedelta (5, "h")
-        date_end += pd.Timedelta (5, "h")
+    logging.debug(f'''Start read_data with
+    stock_ticker = {stock_ticker},
+    period = {period},
+    date_start = {date_start},
+    date_end = {date_end},
+    add_dividends_and_stock_splits={add_dividends_and_stock_splits},
+    auto_adjust={auto_adjust}''')
     
-    logger.debug(f"start read_data({stock_ticker}, {date_start}, {date_end}, {interval}")
+    # fix a bug in yfinance of not applying the localization when this option is on
+    # my guess it is it ignores the tz already set on this date, it sets to maybe UTC
+    # then it convers to US and thus shows from the previous day as well
+    # so we add it back what will be subtracted by the time difference between us and New York
+    if add_outside_trading_hours:
+        if date_start is not None:
+            date_start += pd.Timedelta (6, "h")
+        if date_end is not None:
+            date_end += pd.Timedelta (6, "h")
+    
     # 
     if interval == "1d" or interval == "1h":
         datetime = "Date"
@@ -105,9 +183,7 @@ def read_data(stock_ticker,
     ticker = yf.Ticker(stock_ticker)
     
     # read the historical data into a data frame
-    logging.debug(f"Load historical data into a data frame for {stock_ticker}, \
-                  add_dividends_and_stock_splits={add_dividends_and_stock_splits}, \
-                  auto_adjust={auto_adjust}")
+    logging.debug(f'''Start ticker.history()''')
     df_original = ticker.history(
         period = period,
         start = date_start,
@@ -150,8 +226,302 @@ def read_data(stock_ticker,
     
     return df
 
+def get_list_date(str_date_start, str_date_end):
+    date_today = pd.Timestamp.today().normalize()
+    date_start_1h = date_today - pd.Timedelta(730 - 1, "d")
+    date_start_2m = date_today - pd.Timedelta(60 - 1, "d")
+    date_start_1m = date_today - pd.Timedelta(30 - 1 , "d")
+    
+    date_start_1d = pd.to_datetime(str_date_start)
+    
+    if str_date_end == "today":
+        date_end = date_today
+    else:    
+        date_end = pd.to_datetime(str_date_end)
+    
+    list_date = []
+    if date_end <= date_start_1d:
+        raise RuntimeError(f"date_end={date_end} <= date_start_1d={date_start_1d}")
+    elif date_end <= date_start_1h:
+        list_date.append((date_start_1d, date_end, "1d"))
+    elif date_end <= date_start_2m:
+        list_date.append((date_start_1d, date_start_1h, "1d"))
+        list_date.append((date_start_1h, date_end, "1h"))
+    elif date_end <= date_start_1m:
+        list_date.append((date_start_1d, date_start_1h, "1d"))
+        list_date.append((date_start_1h, date_start_2m, "1h"))
+        list_date.append((date_start_2m, date_end, "2m"))
+    elif date_end <= date_today:
+        list_date.append((date_start_1d, date_start_1h, "1d"))
+        list_date.append((date_start_1h, date_start_2m, "1h"))
+        list_date.append((date_start_2m, date_start_1m, "2m"))
+        # now comes an extra constraint that in this last 30 days interval
+        # we can query for 1 minute interval in just 7 days long intervals
+        # so we need to query several times (maximum 4 times)
+        # first let's evaluate the boundaries for these
+        date_start_1m_0 = date_start_1m + pd.Timedelta(0 * 7, "d")
+        date_start_1m_1 = date_start_1m + pd.Timedelta(1 * 7, "d")
+        date_start_1m_2 = date_start_1m + pd.Timedelta(2 * 7, "d")
+        date_start_1m_3 = date_start_1m + pd.Timedelta(3 * 7, "d")
+        date_start_1m_4 = date_start_1m + pd.Timedelta(4 * 7, "d")
+        logging.debug(f"date_start_1m_0={date_start_1m_0}")
+        logging.debug(f"date_start_1m_1={date_start_1m_1}")
+        logging.debug(f"date_start_1m_2={date_start_1m_2}")
+        logging.debug(f"date_start_1m_3={date_start_1m_3}")
+        logging.debug(f"date_start_1m_4={date_start_1m_4}")
+        if date_end <= date_start_1m_1:
+            list_date.append((date_start_1m_0, date_end, "1m"))
+        elif date_end <= date_start_1m_2:
+            list_date.append((date_start_1m_0, date_start_1m_1, "1m"))
+            list_date.append((date_start_1m_1, date_end, "1m"))
+        elif date_end <= date_start_1m_3:
+            list_date.append((date_start_1m_0, date_start_1m_1, "1m"))
+            list_date.append((date_start_1m_1, date_start_1m_2, "1m"))
+            list_date.append((date_start_1m_2, date_end, "1m"))
+        elif date_end <= date_start_1m_4:
+            list_date.append((date_start_1m_0, date_start_1m_1, "1m"))
+            list_date.append((date_start_1m_1, date_start_1m_2, "1m"))
+            list_date.append((date_start_1m_2, date_start_1m_3, "1m"))
+            list_date.append((date_start_1m_3, date_end, "1m"))
+        else:
+            list_date.append((date_start_1m_0, date_start_1m_1, "1m"))
+            list_date.append((date_start_1m_1, date_start_1m_2, "1m"))
+            list_date.append((date_start_1m_2, date_start_1m_3, "1m"))
+            list_date.append((date_start_1m_3, date_start_1m_4, "1m"))
+            list_date.append((date_start_1m_4, date_end, "1m"))        
+    else:
+        raise RuntimeError(f"date_end={date_end} > date_today={date_today}")
+    logging.info(f"list_date:")
+    for date in list_date:
+        logging.info(date)
+    return list_date
+
 def get_output_file_name(output_folder_name, date_start, date_end, interval, stock_ticker):
     return f"{output_folder_name}/df_{date_start}_{date_end}_{interval}_{stock_ticker}.pickle"
+
+def get_df_from_list_date(
+    stock_ticker: str,
+    list_date: list,
+    output_folder_name: str,
+    period: str,
+    add_outside_trading_hours: bool,
+    add_dividends_and_stock_splits: bool,
+    auto_adjust: bool,
+    do_store_all_period_to_file: bool,
+    do_store_only_some_period_to_file: bool,
+    ):
+    list_df = []
+    for s, e, interval in list_date:
+        date_start = s.tz_localize(LOCALIZE_US_STOCK_MARKET)
+        date_end = e.tz_localize(LOCALIZE_US_STOCK_MARKET)
+        logger.info(f"{stock_ticker} from {date_start} to {date_end} with interval {interval}")
+
+        # read the data
+        df = read_data(stock_ticker,
+                   period,
+                   date_start,
+                   date_end,
+                   interval,
+                   add_outside_trading_hours,
+                   add_dividends_and_stock_splits,
+                   auto_adjust)
+        
+        #
+        logger.info(f"len = {len(df)}")
+        if len(df) > 0:
+            #if stock_ticker == "AMRH":
+            #    if interval.endswith("h") or interval.endswith("m"):
+            #        # ajust by the stock split of 4 stocks -> 1 stock
+            #        apply_split(df, 4, 1)
+            # add to list
+            list_df.append(df)
+            # save for future
+            ss = str(s.date())
+            se = str(e.date())
+            output_file_name = get_output_file_name(output_folder_name, ss, se, interval, stock_ticker)
+            df.to_pickle(output_file_name )
+            
+    logging.debug(f"list_df has {len(list_df)} elements that we will concatenate.")
+    # concatenate all to data framews
+    df_all = pd.concat(list_df, axis = 0)
+    logging.debug(f"df_all after concatenation has {len(df_all)} elements.\nfrom date {df_all.index[0]} to date {df_all.index[-1]}.")
+    
+    if do_store_all_period_to_file:
+        logging.debug("Store the entire period of the stock existence to file.")
+        date_all_start = str(list_date[0][0].date())
+        date_all_end = str(list_date[-1][1].date())
+        output_file_name = get_output_file_name(output_folder_name, date_all_start, date_all_end, "al", stock_ticker)
+        df_all.to_pickle(output_file_name)
+    
+    if do_store_only_some_period_to_file:
+        loging.debug("Store also only from a particular date onwards.")
+        date_all_start = "2019-01-01"
+        df_all_2 = df_all[df_all.index > pd.to_datetime(date_all_start).tz_localize(LOCALIZE_US_STOCK_MARKET)]
+        output_file_name = get_output_file_name(output_folder_name, date_all_start, date_all_end, "al", stock_ticker)
+        df_all_2.to_pickle(output_file_name)
+    
+    logging.debug("End get_df_from_list_date(). Return df_all")                  
+    return df_all
+
+def get_first_day_of_stock_ticker(
+    input_file_name_info: str,
+    stock_ticker: str,
+    add_outside_trading_hours: bool = True,
+    add_dividends_and_stocks_splits: bool = True,
+    auto_adjust: bool = True,
+) -> str:
+    '''
+    Return the first day when the stock started trading.
+    Check if it is already stored in our pickle file.
+    If not, query the database to collect it, then add to the pickle file.
+    '''
+    logging.info(f'Start get_first_day_of_stock_ticker({"stock_ticker"}).')
+    # check if the file exists
+    path = Path(input_file_name_info)
+    if path.exists() == False:
+        if True:
+            raise RuntimeError(f"file {input_file_name_info} does not exist!")
+        else:
+            # maybe we want to create it
+            df_info = pd.DataFrame([], columns = ["stock_ticker", "date_first"])
+            df_info.set_index("stock_ticker", inplace = True)
+            df_info.to_pickle(input_file_name_info)
+    
+    # if we are here, then the info pickle file exists, so let's open it
+    df_info = pd.read_pickle(input_file_name_info)
+    
+    # check if the ticker is in the file and if so, return the data there
+    if stock_ticker in df_info.index:
+        logging.info("Start retrieve date_first from df_info.")
+        str_date_start = df_info.loc[stock_ticker]["date_first"]
+    else:
+        # the ticker does not exist in the data frame, so we query the database to retrieve it.
+        logging.info(f"Start query to find first date of stock_ticker={stock_ticker}.")
+        df = read_data(stock_ticker,
+                   "max",
+                   None,
+                   None,
+                   "1d",
+                   add_outside_trading_hours,
+                   add_dividends_and_stocks_splits,
+                   auto_adjust)
+        # calculate list_date
+        str_date_start = str(df.index[0].date())
+        # update the data info data frame
+        df_info.loc[stock_ticker] = str_date_start
+        # sort to be again in alphabetical order
+        df_info.sort_index(inplace = True)
+        # save back to the same file
+        df_info.to_pickle(input_file_name_info)
+        
+    # ready to return
+    logging.info(f"First date of stock_ticker={stock_ticker} is {str_date_start}.")
+    return str_date_start
+    
+def run_all_stock_stickers(
+    input_folder_name_info: str,
+    input_folder_name: str,
+    input_file_name: str,
+    output_folder_name: str,
+    add_outside_trading_hours: bool,
+    add_dividends_and_stocks_splits: bool,
+    auto_adjust: bool,
+):
+    # data frame with ticker info
+    input_file_name_info = input_file_name_info = f"{input_folder_name_info}/info.pickle"
+    # list of tickers
+    list_stock_ticker_folder = get_list_stock_ticker_in_folder(input_folder_name+"/210109")
+    list_stock_ticker_folder2 = get_list_stock_ticker_in_folder(input_folder_name+"/210102")
+    list_stock_ticker_file = get_list_stock_ticker_from_file(input_file_name)
+    # read the file and save to a file
+    str_today = str(pd.Timestamp.today().date())
+    logging.info(f"Today is {str_today}")
+    for stock_ticker in list_stock_ticker_folder:# list_stock_ticker_file: 
+        if False:
+            # do only for one ticker
+            if stock_ticker != "TSLA":
+                continue
+        already_have = stock_ticker in list_stock_ticker_folder2 #list_stock_ticker_folder
+        logging.info(f"stock_ticker={stock_ticker}, already_have={already_have}")
+        
+        if True:
+            #if already_have == True:
+            str_date_start = get_first_day_of_stock_ticker(input_file_name_info, stock_ticker, add_outside_trading_hours, add_dividends_and_stocks_splits, auto_adjust)
+            logging.info(f"str_date_start={str_date_start}")   
+        
+        continue
+        
+        if already_have == False:
+            logging.info(f"Create it until back to the latest folder, input_folder_name={input_folder_name}.")
+            # deduce date from folder name
+            folder_name = PurePath(input_folder_name).parts[-1]
+            logging.info(f"folder_name={folder_name}")
+            # from folder name deduce the date
+            str_date_end = str(pd.to_datetime(f"20{folder_name[0:2]} {folder_name[2:4]} {folder_name[4:6]}"))
+            logging.info(f"str_date_end={str_date_end}")
+            #info_file = f"{}"
+            str_date_start = get_first_day_of_stock_ticker(input_file_name_info, stock_ticker, add_outside_trading_hours, add_dividends_and_stocks_splits, auto_adjust)
+            logging.info(f"str_date_start={str_date_start}")
+            list_date = get_list_date(str_date_start, str_date_end)
+            # now store in the previous folder
+            #do_store_all_period_to_file = True
+            #do_store_only_some_period_to_file = False
+            # df = get_df_from_list_date(stock_ticker, list_date, OUTPUT_FOLDER_NAME, PERIOD, ADD_OUTSIDE_TRADING_HOURS,  ADD_DIVIDENDS_AND_STOCK_SPLITS, AUTO_ADJUST, do_store_all_period_to_file, do_store_only_some_period_to_file)
+            #return df
+        continue
+    
+        # create list of dates
+        if LIST_DATE is None:
+            # find automatically the range that we want
+            # we collect the data using the period max, then find the first date
+            # than depending on that date build the LIST_DATE
+            df = read_data(stock_ticker,
+                   "max",
+                   None,
+                   None,
+                   "1d",
+                   ADD_OUTSIDE_TRADING_HOURS,
+                   ADD_DIVIDENDS_AND_STOCK_SPLITS,
+                   AUTO_ADJUST)
+    
+            # calculate list_date
+            str_date_start = str(df.index[0].date())
+            str_date_end = str_today
+            logging.info(f"str_date_start={str_date_start}, str_date_end={str_date_end}")
+            list_date = get_list_date(str_date_start, str_date_end)
+        else:
+            list_date = LIST_DATE
+        for date in list_date:
+            logging.info(f"{date}")
+        
+        do_store_all_period_to_file = False
+        do_store_only_some_period_to_file = False
+        df = get_df_from_list_date(stock_ticker, list_date, OUTPUT_FOLDER_NAME, PERIOD, ADD_OUTSIDE_TRADING_HOURS,  ADD_DIVIDENDS_AND_STOCK_SPLITS, AUTO_ADJUST, do_store_all_period_to_file, do_store_only_some_period_to_file)
+    
+        do_combine_with_previous_file = True   
+        if do_combine_with_previous_file:
+            logging.debug("Start do_combine_with_previous_file.")
+            # retrieve the previous file
+            date_start_all = "2019-01-01"
+            date_end_all = "2021-01-01"
+            suffix = "al"
+            input_file_name_data = f"{OUTPUT_FOLDER_NAME}/df_{date_start_all}_{date_end_all}_{suffix}_{stock_ticker}.pickle"
+            df__ = pd.read_pickle(input_file_name_data)
+            logging.debug(f"Previous file {input_file_name_data} has {len(df__)} entries.")
+    
+            logging.debug("Start concatenating the old and new file")
+            df_ = pd.concat([df__, df], axis = 0)
+            logging.debug("Sort by index in chronolical order")
+            df_.sort_index(inplace = True)
+            logging.debug("Remove potential rare wrong values for after hours that are just to huge.")
+            df_ = df_[df_.Close < 1e6] # eliminate sometimes very high wrong values
+    
+            # write to file
+            date_end_all = str(LIST_DATE[-1][1].date())
+            output_file_name_data = f"{OUTPUT_FOLDER_NAME}/df_{date_start_all}_{date_end_all}_{suffix}_{stock_ticker}.pickle"
+            df_.to_pickle(output_file_name_data)
+            logging.debug(f"Written final df_ with {len(df_)} elements to file {output_file_name_data}.")
+    
 
 def add_interval_with_open(df_):
     df = df_.reset_index()
@@ -252,7 +622,7 @@ def get_df_news(input_file_name_news, df):
         # sort by datetime
         df_news.sort_index(inplace = True)
     except IOError:
-        print(f"File {input_news_file_name} not accessible.")
+        raise RuntimeError(f"File {input_news_file_name} not accessible.")
     finally:
         f.close()
     return df_news

@@ -423,6 +423,7 @@ def run_all_stock_stickers(
     input_folder_name: str,
     input_file_name: str,
     output_folder_name: str,
+    period: str,
     add_outside_trading_hours: bool,
     add_dividends_and_stocks_splits: bool,
     auto_adjust: bool,
@@ -436,20 +437,20 @@ def run_all_stock_stickers(
     # read the file and save to a file
     str_today = str(pd.Timestamp.today().date())
     logging.info(f"Today is {str_today}")
-    for stock_ticker in list_stock_ticker_folder:# list_stock_ticker_file: 
+    for stock_ticker in list_stock_ticker_file: 
         if False:
             # do only for one ticker
             if stock_ticker != "TSLA":
                 continue
-        already_have = stock_ticker in list_stock_ticker_folder2 #list_stock_ticker_folder
+        already_have = stock_ticker in list_stock_ticker_folder
         logging.info(f"stock_ticker={stock_ticker}, already_have={already_have}")
         
-        if True:
+        if False:
             #if already_have == True:
             str_date_start = get_first_day_of_stock_ticker(input_file_name_info, stock_ticker, add_outside_trading_hours, add_dividends_and_stocks_splits, auto_adjust)
             logging.info(f"str_date_start={str_date_start}")   
         
-        continue
+        # continue
         
         if already_have == False:
             logging.info(f"Create it until back to the latest folder, input_folder_name={input_folder_name}.")
@@ -464,9 +465,9 @@ def run_all_stock_stickers(
             logging.info(f"str_date_start={str_date_start}")
             list_date = get_list_date(str_date_start, str_date_end)
             # now store in the previous folder
-            #do_store_all_period_to_file = True
-            #do_store_only_some_period_to_file = False
-            # df = get_df_from_list_date(stock_ticker, list_date, OUTPUT_FOLDER_NAME, PERIOD, ADD_OUTSIDE_TRADING_HOURS,  ADD_DIVIDENDS_AND_STOCK_SPLITS, AUTO_ADJUST, do_store_all_period_to_file, do_store_only_some_period_to_file)
+            do_store_all_period_to_file = True
+            do_store_only_some_period_to_file = False
+            df = get_df_from_list_date(stock_ticker, list_date, input_folder_name, period, add_outside_trading_hours,  add_dividends_and_stock_splits, auto_adjust, do_store_all_period_to_file, do_store_only_some_period_to_file)
             #return df
         continue
     

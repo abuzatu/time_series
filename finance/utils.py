@@ -671,7 +671,7 @@ def plot_interactive(df, df_news = None, show_pre = True, show_after = True):
         xlim = (df.index[0].tz_localize(None) - pd.Timedelta(60, "m"),
                  df.index[-1].tz_localize(None) + pd.Timedelta(60, "m")),
         # ylim = (100, 135),
-        # hover_cols = ["datetime_end", "Close", "Volume"],
+        hover_cols = ["datetime_end", "Close", "Volume"],
         grid = True,
         )
     
@@ -742,14 +742,26 @@ def plot_interactive(df, df_news = None, show_pre = True, show_after = True):
         
     return final_plot
 
-def plot_interactive_volume(df, df_news = None):
 
+def plot_interactive_volume(df, df_news = None):
     volume = df["Volume"].hvplot.bar(
         # color = "orange",
         line_color = "orange",
         fill_color = "orange",
         width = 600,
         height = 400,
+        hover_cols = ["Close"],
+        )
+    
+    volume = df.hvplot.bar(
+        x = "datetime_end",
+        y = "Volume",
+        # color = "orange",
+        line_color = "orange",
+        fill_color = "orange",
+        width = 600,
+        height = 400,
+        hover_cols = ["Open", "Close", "Low", "High"],
         )
     
     # news but buggy, it shows some of the news at the right time

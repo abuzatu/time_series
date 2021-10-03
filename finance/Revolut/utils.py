@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import yfinance as yf
 
 import logging
 
@@ -31,6 +32,12 @@ def get_date(year, x):
 def change_date(year, df):  
     df["date"] = df.date.map(lambda x: get_date(year, x))
     # df.set_index("date", inplace = True)
+    return df
+
+def get_df_deposit(year):
+    input_file_name = f"/Users/abuzatu/Work/data/finance/stocks/Revolut/Revolut_trades_{year}_deposits.txt"
+    df = pd.read_csv(input_file_name, delimiter=" ")
+    df = change_date(year, df)
     return df
 
 def get_df_trade(year):
@@ -166,3 +173,15 @@ def get_df_sum(df_trade):
     
     # df_sum = df_sum.sort_values(by="realised_gain", ascending=False)
     return df_sum
+
+def get_df_all(df_sum):
+    """
+    Add the latest prices from Yahoo Finance
+    Calculate unrealised gains
+    """
+    df_all = df_sum.copy()
+    df_all["stock_current_price"] = df_all.index.map(lambda x: yf.Ticker(x).info["regularMarketPrice"]).fillna(0.0)
+    df_all["unrealised_gain"] = df_all["stock_left"] * (df_all["stock_current_price"] - df_sum["stock_left_average_price"])
+    df_all["total_gain"] = df_all["realised_gain"] + df_all["unrealised_gain"]
+    df_all = df_all.sort_values(by="realised_gain", ascending = False)
+    return df_all
